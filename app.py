@@ -1,4 +1,4 @@
-import streamlit as st, time, json, re, unicodedata, io
+import streamlit as st, time, json, re, unicodedata, io, os
 from datetime import datetime
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -6,76 +6,52 @@ from pathlib import Path
 
 st.set_page_config(page_title="研究报告中判官", page_icon="📋", layout="wide", initial_sidebar_state="collapsed")
 
-# ── CSS: mobile-first responsive design ──
 st.markdown("""<style>
-/* ---- Base ---- */
-*{box-sizing:border-box}
-.stApp{max-width:100vw;overflow-x:hidden}
-
-/* ---- Typography ---- */
-html{font-size:15px}
-@media(max-width:480px){html{font-size:14px}}
-h1{font-size:1.5rem!important;margin:0 0 .5rem!important}
-h2{font-size:1.2rem!important}
-h3{font-size:1.05rem!important}
+*{box-sizing:border-box}.stApp{max-width:100vw;overflow-x:hidden}
+html{font-size:15px}@media(max-width:480px){html{font-size:14px}}
+h1{font-size:1.5rem!important;margin:0 0 .5rem!important}h2{font-size:1.2rem!important}h3{font-size:1.05rem!important}
 .stCaption{font-size:.8rem!important;color:#888!important}
-
-/* ---- Buttons ---- */
-.stButton>button,.stDownloadButton>button{
-    border-radius:10px!important;font-weight:600!important;
-    padding:.7rem 1.2rem!important;transition:all .15s
-}
+.stButton>button,.stDownloadButton>button{border-radius:10px!important;font-weight:600!important;padding:.7rem 1.2rem!important;transition:all .15s}
 .stButton>button:hover{transform:translateY(-1px);box-shadow:0 2px 8px rgba(0,0,0,.1)}
-@media(max-width:768px){
-    .stButton>button,.stDownloadButton>button{width:100%!important;min-height:48px!important;font-size:1rem!important}
-}
-
-/* ---- Inputs ---- */
+@media(max-width:768px){.stButton>button,.stDownloadButton>button{width:100%!important;min-height:48px!important;font-size:1rem!important}}
 .stTextArea textarea{border-radius:10px!important;font-size:.95rem!important;padding:.8rem!important}
-.stTextInput input{border-radius:10px!important;font-size:.95rem!important}
 .stFileUploader{border-radius:12px!important;border:2px dashed #ccc!important;padding:1.5rem!important}
-.stRadio>div{flex-wrap:wrap;gap:.3rem}
-.stRadio label{margin:0!important;padding:.4rem .8rem!important;border-radius:8px!important;font-size:.85rem!important;background:#f0f2f6;cursor:pointer}
-
-/* ---- Sidebar ---- */
+.stRadio label{font-size:.85rem!important;padding:.4rem .8rem!important;border-radius:8px!important;background:#f0f2f6}
 section[data-testid="stSidebar"]{background:#f8f9fa}
-@media(max-width:768px){
-    section[data-testid="stSidebar"]{width:100%!important}
-    section[data-testid="stSidebar"] .stCheckbox label{font-size:.9rem!important}
-}
-
-/* ---- Report ---- */
 .report-box{max-height:60vh;overflow-y:auto;padding:1rem;border:1px solid #e8e8e8;border-radius:12px;background:#fdfdfd;font-size:.9rem;line-height:1.7;word-wrap:break-word}
 @media(max-width:768px){.report-box{max-height:50vh;padding:.8rem;font-size:.85rem;line-height:1.6}}
-
-/* ---- Cards & Metrics ---- */
 [data-testid="metric-container"]{padding:.5rem!important;border-radius:10px!important;background:#f8f9fa!important}
 [data-testid="metric-container"] label{font-size:.7rem!important}
-
-/* ---- Tabs ---- */
-.stTabs [data-baseweb="tab"]{font-size:.85rem!important;padding:.5rem 1rem!important}
-@media(max-width:768px){.stTabs [data-baseweb="tab"]{font-size:.8rem!important;padding:.4rem .6rem!important}}
-
-/* ---- Expander ---- */
-.streamlit-expanderHeader{font-size:.85rem!important;padding:.5rem .8rem!important;border-radius:8px!important}
-
-/* ---- Spacing ---- */
-.stMarkdown{margin-bottom:.5rem!important}
-hr{margin:.8rem 0!important}
 .block-container{padding:1rem 1.5rem!important;max-width:900px!important}
 @media(max-width:768px){.block-container{padding:.5rem .8rem!important}}
-
-/* ---- Hide Streamlit branding ---- */
 #MainMenu{visibility:hidden}footer{visibility:hidden}
-header[data-testid="stHeader"]{background:transparent!important}
 </style>""", unsafe_allow_html=True)
 
-# ── Session ──
-for k,v in {"running":False,"done":False,"reports":[],"all_results":[],"files":[],"search":{},"history":[]}.items():
+# ── Persistent history via JSON file ──
+HISTORY_FILE = os.path.join(os.path.dirname(__file__) if "__file__" in dir() else ".", ".history.json")
+
+def load_history():
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.loads(f.read())
+    except: return []
+
+def save_history(data):
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data[-20:], ensure_ascii=False))
+    except: pass
+
+# Init session
+for k,v in {"running":False,"done":False,"reports":[],"all_results":[],"files":[],"search":{},"history":None}.items():
     if k not in st.session_state: st.session_state[k]=v
+if st.session_state.history is None:
+    st.session_state.history = load_history()
+
 def reset():
     for k in ["running","done","reports","all_results","files","search"]:
         st.session_state[k]=False if k in("running","done")else([]if k in("reports","all_results","files")else({}if k=="search"else""))
+
 def sk(key,default=""):
     try:return st.secrets.get(key,default)
     except:
@@ -93,8 +69,7 @@ def parse_pdf(fb,fn):
         for page in doc:
             text=page.get_text("text")
             if not text.strip():
-                blocks=page.get_text("blocks")
-                text="\n".join(b[4] for b in blocks if len(b)>4 and b[6]==0)
+                blocks=page.get_text("blocks");text="\n".join(b[4] for b in blocks if len(b)>4 and b[6]==0)
             if not text.strip():
                 d=page.get_text("dict")
                 for block in d.get("blocks",[]):
@@ -106,8 +81,7 @@ def parse_pdf(fb,fn):
             if not text.strip():empty+=1
             total+=text+"\n"
         doc.close()
-        if len(total)<100 and empty>doc.page_count*0.5:
-            return{"fn":fn,"txt":"","chars":0,"err":f"含{imgs}张图片文本不足"}
+        if len(total)<100 and empty>doc.page_count*0.5:return{"fn":fn,"txt":"","chars":0,"err":f"含{imgs}张图片文本不足"}
         return{"fn":fn,"txt":total,"chars":len(total),"pages":doc.page_count}
     except Exception as e:
         try:doc.close()
@@ -163,25 +137,31 @@ def call_llm(pid,pk,pm,sys_msg,usr_msg,max_tok=4096):
     r=urlopen(Request(url,data=json.dumps(body).encode(),headers=h,method="POST"),timeout=300)
     return json.loads(r.read().decode())["choices"][0]["message"]["content"]
 
-def search_web(query,n=3):
+# ── Web search: HTML scraping as primary (more reliable than DDG API) ──
+def search_web(query,n=5):
     results=[]
+    # Strategy 1: DDG HTML (most reliable, no API key needed)
     try:
-        r=urlopen(Request(f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1&skip_disambig=1"),timeout=10)
-        d=json.loads(r.read().decode())
-        for t in d.get("RelatedTopics",[])[:n]:
-            if isinstance(t,dict)and"Text"in t:results.append({"t":t.get("FirstURL",""),"s":t.get("Text","")[:200]})
-        if d.get("AbstractText"):results.append({"t":d.get("AbstractSource",""),"s":d.get("AbstractText","")[:200]})
-    except:pass
+        r=urlopen(Request(f"https://html.duckduckgo.com/html/?q={query}",headers={"User-Agent":"Mozilla/5.0"}),timeout=15)
+        html=r.read().decode("utf-8",errors="ignore")
+        links=re.findall(r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>',html)
+        snippets=re.findall(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',html)
+        for i,(href,title) in enumerate(links[:n]):
+            s=snippets[i] if i<len(snippets) else""
+            s=re.sub(r'<[^>]+>','',s).strip()[:200]
+            if s:results.append({"t":title.strip(),"s":s})
+    except Exception as e:st.caption(f"DDG HTML: {e}")
+
+    # Strategy 2: DDG API fallback
     if len(results)<2:
         try:
-            r=urlopen(Request(f"https://html.duckduckgo.com/html/?q={query}"),timeout=10)
-            html=r.read().decode("utf-8",errors="ignore")
-            links=re.findall(r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>',html)
-            snippets=re.findall(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',html)
-            for i,(href,title) in enumerate(links[:n]):
-                s=snippets[i] if i<len(snippets) else""
-                s=re.sub(r'<[^>]+>','',s)[:200];results.append({"t":title.strip(),"s":s})
+            r=urlopen(Request(f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1&skip_disambig=1"),timeout=10)
+            d=json.loads(r.read().decode())
+            for t in d.get("RelatedTopics",[])[:n]:
+                if isinstance(t,dict)and"Text"in t:results.append({"t":t.get("FirstURL",""),"s":t.get("Text","")[:200]})
+            if d.get("AbstractText"):results.append({"t":d.get("AbstractSource",""),"s":d.get("AbstractText","")[:200]})
         except:pass
+
     return results[:n]
 
 def extract_json(txt):
@@ -207,24 +187,20 @@ if not has_keys:
     st.warning("请在 Settings > Secrets 中配置 API Key")
     st.code("DEEPSEEK_API_KEY=\"sk-xxx\"\nGOOGLE_API_KEY=\"xxx\"\nGLM_API_KEY=\"xxx\"")
 else:
-    # Sidebar: compact, non-essential info
     with st.sidebar:
-        st.caption("模型")
-        models=[]
+        st.caption("模型");models=[]
         if ds_key:st.checkbox("DeepSeek V4 Pro",value=True,disabled=True,key="mds");models.append(("deepseek",ds_key,ds_model))
         if gk:
             if st.checkbox("Gemini 3.5 Flash",value=False,key="mgg"):models.append(("google",gk,sk("GOOGLE_MODEL","gemini-2.5-flash")))
         if glk:
             if st.checkbox("GLM 5.1 Pro",value=False,key="mglm"):models.append(("glm",glk,sk("GLM_MODEL","glm-4.5")))
         st.caption(f"共{len(models)}个模型")
-        st.caption("搜索: DuckDuckGo")
-        if st.button("清空历史",use_container_width=True):st.session_state.history=[]
+        if st.button("清空历史",use_container_width=True):
+            st.session_state.history=[];save_history([])
         st.caption(f"历史:{len(st.session_state.history)}条")
 
-    # Main: core interactions large & prominent
     st.caption("多模型交叉验证 · 修正结论报告")
     st.divider()
-
     st.subheader("上传文档")
     up=st.file_uploader("拖拽或点击上传 PDF/DOCX/MD/TXT/HTML",type=["pdf","docx","md","txt","html","htm"],accept_multiple_files=True,label_visibility="collapsed")
     if up:
@@ -294,25 +270,28 @@ if st.session_state.running and not st.session_state.done and has_keys:
             except:
                 try:claims=extract_json(call_llm("deepseek",ds_key,ds_model,S1,f"文档前段：\n\n{doc_text[:5000]}"))
                 except:pass
-            st.caption(f"结论:{len(claims.get('conclusions',[]))}论点:{len(claims.get('arguments',[]))}论据:{len(claims.get('evidence',[]))}")
+            nc=len(claims.get("conclusions",[]));na=len(claims.get("arguments",[]));ne=len(claims.get("evidence",[]))
+            st.caption(f"结论:{nc}论点:{na}论据:{ne}")
 
+            # Web search with better queries
             stat.info(f"检索{gidx+1}/{total_groups}");pbar.progress(bp+int(gp*.4))
             queries=[]
             for c in claims.get("conclusions",[])[:5]:
-                t=c.get("text","")
-                if len(t)>20:queries.append(t[:100])
+                t=c.get("text","")[:80]
+                if len(t)>15:queries.append(t)
             for e in claims.get("evidence",[])[:3]:
                 if e.get("type")in("数据","引用"):
-                    t=e.get("text","")
-                    if len(t)>20:queries.append(t[:100])
-            if ci:queries.append(ci[:100])
-            queries=queries[:5]
+                    t=e.get("text","")[:80]
+                    if len(t)>15:queries.append(t)
+            if ci:queries.append(ci[:80])
+            queries=list(dict.fromkeys(queries))[:5]  # deduplicate
             sr={};stxt=""
             for q in queries:
-                r=search_web(q)
+                r=search_web(q,4)
                 if r:sr[q]=r
-                for it in r:stxt+=f"\n[检索「{q}」]{it['s'][:150]}"
-            st.caption(f"{len(queries)}次查询,{sum(len(v)for v in sr.values())}条")
+                for it in r:stxt+=f"\n[「{q}」]{it['s'][:150]}"
+            sc=sum(len(v)for v in sr.values())
+            st.caption(f"查询:{len(queries)}次,结果:{sc}条")
 
             stat.info(f"验证{gidx+1}/{total_groups}");pbar.progress(bp+int(gp*.6))
             S2="你是学术交叉验证专家。逐条验证每个结论，给出修正后的最终结论。格式：\n##结论N\n-原文\n-验证分析\n-修正结论:[经修正后的最终表述]\n全部完成后，附录列出问题清单及严重程度。"
@@ -331,9 +310,12 @@ if st.session_state.running and not st.session_state.done and has_keys:
             all_reports.append({"doc":doc_info['fn'],"report":report,"results":gr,"search":sr,"time":datetime.now().strftime("%H:%M")})
             pbar.progress(bp+gp)
 
+        # Save to persistent history
         for rpt in all_reports:
             st.session_state.history.append({"time":datetime.now().strftime("%m-%d %H:%M"),"title":rpt['doc'][:50],"report":rpt['report'],"results":rpt['results'],"search":rpt['search']})
         st.session_state.history=st.session_state.history[-20:]
+        save_history(st.session_state.history)
+
         st.session_state.all_results=all_results;st.session_state.reports=all_reports
         st.session_state.done=True;pbar.progress(100);stat.success("完成");time.sleep(0.3);st.rerun()
     except Exception as e:
@@ -352,10 +334,6 @@ if st.session_state.done and st.session_state.reports:
                 st.markdown(rpt['report']);st.markdown('</div>',unsafe_allow_html=True)
                 ts=datetime.now().strftime("%Y%m%d_%H%M%S")
                 st.download_button("下载",data=rpt['report'].encode(),file_name=f"审校报告_{ts}.md",mime="text/markdown",key=f"dl_{i}")
-                with st.expander("模型详情"):
-                    for rr in rpt['results']:
-                        ic="OK" if not rr.get("e")else"ERR"
-                        st.caption(f"{ic} {rr['p'].upper()}")
     else:
         rpt=reports[0];tsc=sum(len(v)for v in rpt['search'].values())
         c1,c2=st.columns(2)
