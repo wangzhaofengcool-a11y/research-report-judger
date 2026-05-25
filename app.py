@@ -85,23 +85,33 @@ def extract_json(txt):
         except:pass
     return{}
 
+# Load models - show error in MAIN area if no keys
+ds_key=sk("DEEPSEEK_API_KEY")
+ds_model=sk("DEEPSEEK_MODEL","deepseek-chat")
+gk=sk("GOOGLE_API_KEY")
+glk=sk("GLM_API_KEY")
+
+if not ds_key and not gk and not glk:
+    st.title("研究报告中判官")
+    st.error("未配置任何 API Key。请在 Streamlit Cloud → Settings → Secrets 中添加。")
+    st.code("DEEPSEEK_API_KEY = \"你的Key\"\nDEEPSEEK_MODEL = \"deepseek-chat\"\nGOOGLE_API_KEY = \"你的Key\"\nGOOGLE_MODEL = \"gemini-2.5-flash\"\nGLM_API_KEY = \"你的Key\"\nGLM_MODEL = \"glm-4.5\"")
+    st.stop()
+
 # Sidebar
 with st.sidebar:
     st.header("模型")
-    ds_key=sk("DEEPSEEK_API_KEY");ds_model=sk("DEEPSEEK_MODEL","deepseek-chat")
-    if not ds_key:st.error("请配置 API Key");st.stop()
-    st.checkbox("DeepSeek V4 Pro",value=True,disabled=True,key="m_ds")
-    models=[("deepseek",ds_key,ds_model)]
-    gk=sk("GOOGLE_API_KEY")
+    models=[]
+    if ds_key:
+        st.checkbox("DeepSeek V4 Pro",value=True,disabled=True,key="m_ds")
+        models.append(("deepseek",ds_key,ds_model))
     if gk:
-        if st.checkbox("Gemini 3.5 Flash",value=False,key="m_gg"):models.append(("google",gk,sk("GOOGLE_MODEL","gemini-2.5-flash")))
-    glk=sk("GLM_API_KEY")
+        if st.checkbox("Gemini 3.5 Flash",value=False,key="m_gg"):
+            models.append(("google",gk,sk("GOOGLE_MODEL","gemini-2.5-flash")))
     if glk:
-        if st.checkbox("GLM 5.1 Pro",value=False,key="m_glm"):models.append(("glm",glk,sk("GLM_MODEL","glm-4.5")))
+        if st.checkbox("GLM 5.1 Pro",value=False,key="m_glm"):
+            models.append(("glm",glk,sk("GLM_MODEL","glm-4.5")))
     st.caption(f"已选 {len(models)} 个模型")
     st.markdown("---")
-    st.subheader("检索")
-    st.info("DuckDuckGo")
     st.caption("v3.2")
 
 # Main
